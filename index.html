@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <title>McDonald's Inventory System</title>
+  <?!= include('CSS'); ?>
+</head>
+<body>
+
+  <!-- ============ LOGIN SCREEN ============ -->
+  <div id="loginScreen" class="login-screen">
+    <div class="login-card">
+      <div class="login-logo">
+        <div class="arch">M</div>
+        <h1>McDonald's</h1>
+        <p>Store Inventory System</p>
+      </div>
+      <form id="loginForm" autocomplete="off">
+        <div class="field">
+          <label for="username">Username</label>
+          <input type="text" id="username" name="username" required autocomplete="username">
+        </div>
+        <div class="field">
+          <label for="password">Password</label>
+          <input type="password" id="password" name="password" required autocomplete="current-password">
+        </div>
+        <div id="loginError" class="error-msg" style="display:none;"></div>
+        <button type="submit" class="btn-primary" id="loginBtn">Log In</button>
+      </form>
+      <p class="login-hint">Default admin: <strong>admin / admin123</strong> (change immediately after first login)</p>
+    </div>
+  </div>
+
+  <!-- ============ APP SHELL ============ -->
+  <div id="appShell" class="app-shell" style="display:none;">
+
+    <!-- Mobile top bar -->
+    <header class="topbar">
+      <button id="hamburgerBtn" class="hamburger" aria-label="Menu">&#9776;</button>
+      <div class="topbar-brand"><span class="arch-sm">M</span> Inventory System</div>
+      <button id="logoutBtnMobile" class="icon-btn" title="Log out">&#9211;</button>
+    </header>
+
+    <!-- Sidebar / Nav -->
+    <nav id="sidebar" class="sidebar">
+      <div class="sidebar-brand">
+        <span class="arch-sm">M</span>
+        <div>
+          <div class="brand-title">McDonald's</div>
+          <div class="brand-sub">Inventory System</div>
+        </div>
+      </div>
+
+      <ul class="nav-list">
+        <li><a href="#" class="nav-link active" data-page="dashboard"><span class="ic">&#9635;</span> Dashboard</a></li>
+        <li><a href="#" class="nav-link" data-page="inventory"><span class="ic">&#128230;</span> Inventory</a></li>
+        <li><a href="#" class="nav-link" data-page="movements"><span class="ic">&#128257;</span> Stock In/Out</a></li>
+        <li><a href="#" class="nav-link" data-page="categories"><span class="ic">&#127991;</span> Categories</a></li>
+        <li><a href="#" class="nav-link" data-page="suppliers"><span class="ic">&#128666;</span> Suppliers</a></li>
+        <li><a href="#" class="nav-link" data-page="reports"><span class="ic">&#128202;</span> Reports</a></li>
+        <li id="navUsers"><a href="#" class="nav-link" data-page="users"><span class="ic">&#128100;</span> Users &amp; Logs</a></li>
+      </ul>
+
+      <div class="sidebar-footer">
+        <div class="user-chip">
+          <div class="avatar" id="userInitial">A</div>
+          <div>
+            <div id="userFullName" class="u-name">-</div>
+            <div id="userRole" class="u-role">-</div>
+          </div>
+        </div>
+        <button id="changePwBtn" class="link-btn">Change Password</button>
+        <button id="logoutBtn" class="btn-secondary">Log Out</button>
+      </div>
+    </nav>
+    <div id="sidebarOverlay" class="sidebar-overlay"></div>
+
+    <!-- Main content -->
+    <main class="content">
+
+      <!-- DASHBOARD -->
+      <section id="page-dashboard" class="page active">
+        <h2 class="page-title">Dashboard</h2>
+        <div class="stat-grid">
+          <div class="stat-card red"><div class="stat-num" id="statTotalItems">0</div><div class="stat-label">Total Items</div></div>
+          <div class="stat-card gold"><div class="stat-num" id="statLowStock">0</div><div class="stat-label">Low Stock Alerts</div></div>
+          <div class="stat-card dark"><div class="stat-num" id="statValue">₱0</div><div class="stat-label">Inventory Value</div></div>
+          <div class="stat-card green"><div class="stat-num" id="statMovements">0</div><div class="stat-label">Movements Today</div></div>
+        </div>
+        <div class="grid-2">
+          <div class="panel">
+            <h3>Low Stock Items</h3>
+            <div id="lowStockList" class="list-box"></div>
+          </div>
+          <div class="panel">
+            <h3>Recent Stock Movements</h3>
+            <div id="recentMovementsList" class="list-box"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- INVENTORY -->
+      <section id="page-inventory" class="page">
+        <div class="page-header">
+          <h2 class="page-title">Inventory</h2>
+          <button class="btn-primary" id="addItemBtn">+ Add Item</button>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table" id="inventoryTable">
+            <thead><tr>
+              <th>Name</th><th>Category</th><th>SKU</th><th>Qty</th><th>Unit</th>
+              <th>Reorder Lvl</th><th>Unit Price</th><th>Supplier</th><th>Updated</th><th>Actions</th>
+            </tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- STOCK MOVEMENTS -->
+      <section id="page-movements" class="page">
+        <div class="page-header">
+          <h2 class="page-title">Stock In / Out</h2>
+          <button class="btn-primary" id="addMovementBtn">+ Record Movement</button>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table" id="movementsTable">
+            <thead><tr><th>Item</th><th>Type</th><th>Qty</th><th>Reason</th><th>By</th><th>Date</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- CATEGORIES -->
+      <section id="page-categories" class="page">
+        <div class="page-header">
+          <h2 class="page-title">Categories</h2>
+          <button class="btn-primary" id="addCategoryBtn">+ Add Category</button>
+        </div>
+        <div class="card-grid" id="categoriesGrid"></div>
+      </section>
+
+      <!-- SUPPLIERS -->
+      <section id="page-suppliers" class="page">
+        <div class="page-header">
+          <h2 class="page-title">Suppliers</h2>
+          <button class="btn-primary" id="addSupplierBtn">+ Add Supplier</button>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table" id="suppliersTable">
+            <thead><tr><th>Name</th><th>Contact</th><th>Phone</th><th>Email</th><th>Address</th><th>Actions</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- REPORTS -->
+      <section id="page-reports" class="page">
+        <h2 class="page-title">Reports &amp; Analytics</h2>
+        <div class="grid-2">
+          <div class="panel">
+            <h3>Low Stock Report</h3>
+            <div id="reportLowStock" class="list-box"></div>
+          </div>
+          <div class="panel">
+            <h3>Inventory Value by Category</h3>
+            <div id="reportByCategory" class="list-box"></div>
+          </div>
+        </div>
+        <div class="stat-grid">
+          <div class="stat-card green"><div class="stat-num" id="reportStockIn">0</div><div class="stat-label">Stock In (30 days)</div></div>
+          <div class="stat-card red"><div class="stat-num" id="reportStockOut">0</div><div class="stat-label">Stock Out (30 days)</div></div>
+          <div class="stat-card dark"><div class="stat-num" id="reportTotalValue">₱0</div><div class="stat-label">Total Inventory Value</div></div>
+        </div>
+      </section>
+
+      <!-- USERS & LOGS -->
+      <section id="page-users" class="page">
+        <div class="page-header">
+          <h2 class="page-title">Users &amp; Activity Logs</h2>
+          <button class="btn-primary" id="addUserBtn">+ Add User</button>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table" id="usersTable">
+            <thead><tr><th>Username</th><th>Full Name</th><th>Role</th><th>Status</th><th>Last Login</th><th>Actions</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <h3 style="margin-top:24px;">Activity Logs</h3>
+        <div class="table-wrap">
+          <table class="data-table" id="logsTable">
+            <thead><tr><th>User</th><th>Action</th><th>Details</th><th>Timestamp</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <!-- ============ MODAL ============ -->
+  <div id="modalOverlay" class="modal-overlay">
+    <div class="modal" id="modalBox"></div>
+  </div>
+
+  <div id="toast" class="toast"></div>
+
+  <?!= include('JavaScript'); ?>
+</body>
+</html>
