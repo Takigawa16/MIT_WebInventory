@@ -1,5 +1,4 @@
-<style>
-  :root {
+:root {
     --mc-red: #DA291C;
     --mc-red-dark: #b91f14;
     --mc-gold: #FFC72C;
@@ -211,4 +210,3 @@
     .page-header .btn-primary { width: 100%; }
     .card-grid { grid-template-columns: 1fr; }
   }
-</style>
