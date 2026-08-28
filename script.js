@@ -31,7 +31,7 @@ if (!firebaseConfig.apiKey || firebaseConfig.apiKey === 'YOUR_API_KEY') {
   throw new Error('firebase-config.js is not configured yet.');
 }
 
-const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyPWUEqihANt8RwJaSVD9LqzxlzR8Mq5yFjv1YlxicgSewN0MSyU0cdAxUUAspRBUbU/exec";
+const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbygTXhiPN74BZ0RL9qOYoYmuGUm5qsfNc3zFKGVRJgjMkJAfEhcX6ksvmYXp5MNelid/exec";
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
