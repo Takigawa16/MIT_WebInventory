@@ -4,12 +4,15 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
   <title>McDonald's Inventory System</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
   <!-- ============ LOGIN SCREEN ============ -->
   <div id="loginScreen" class="login-screen">
+    <div class="login-arches"><span></span><span></span><span></span></div>
     <div class="login-card">
       <div class="login-logo">
         <div class="arch">M</div>
@@ -19,16 +22,16 @@
       <form id="loginForm" autocomplete="off">
         <div class="field">
           <label for="username">Username</label>
-          <input type="text" id="username" required autocomplete="username">
+          <input type="text" id="username" required autocomplete="username" placeholder="admin">
         </div>
         <div class="field">
           <label for="password">Password</label>
-          <input type="password" id="password" required autocomplete="current-password">
+          <input type="password" id="password" required autocomplete="current-password" placeholder="••••••••">
         </div>
         <div id="loginError" class="error-msg" style="display:none;"></div>
         <button type="submit" class="btn-primary" id="loginBtn">Log In</button>
       </form>
-      <p class="login-hint">Default admin: <strong>admin / admin123</strong> (change immediately after first login)</p>
+      <p class="login-hint">Default admin: <strong>admin / admin123</strong> — change this after your first login.</p>
     </div>
   </div>
 
@@ -57,7 +60,6 @@
         <li><a href="#" class="nav-link" data-page="categories"><span class="ic">&#127991;</span> Categories</a></li>
         <li><a href="#" class="nav-link" data-page="suppliers"><span class="ic">&#128666;</span> Suppliers</a></li>
         <li><a href="#" class="nav-link" data-page="reports"><span class="ic">&#128202;</span> Reports</a></li>
-        <li id="navUsers"><a href="#" class="nav-link" data-page="users"><span class="ic">&#128100;</span> Users &amp; Logs</a></li>
       </ul>
 
       <div class="sidebar-footer">
@@ -65,7 +67,7 @@
           <div class="avatar" id="userInitial">A</div>
           <div>
             <div id="userFullName" class="u-name">-</div>
-            <div id="userRole" class="u-role">-</div>
+            <div class="u-role">Administrator</div>
           </div>
         </div>
         <button id="changePwBtn" class="link-btn">Change Password</button>
@@ -76,6 +78,7 @@
 
     <main class="content">
 
+      <!-- DASHBOARD -->
       <section id="page-dashboard" class="page active">
         <h2 class="page-title">Dashboard</h2>
         <div class="stat-grid">
@@ -90,6 +93,7 @@
         </div>
       </section>
 
+      <!-- INVENTORY (core CRUD) -->
       <section id="page-inventory" class="page">
         <div class="page-header"><h2 class="page-title">Inventory</h2><button class="btn-primary" id="addItemBtn">+ Add Item</button></div>
         <div class="table-wrap">
@@ -100,21 +104,24 @@
         </div>
       </section>
 
+      <!-- STOCK MOVEMENTS -->
       <section id="page-movements" class="page">
         <div class="page-header"><h2 class="page-title">Stock In / Out</h2><button class="btn-primary" id="addMovementBtn">+ Record Movement</button></div>
         <div class="table-wrap">
           <table class="data-table" id="movementsTable">
-            <thead><tr><th>Item</th><th>Type</th><th>Qty</th><th>Reason</th><th>By</th><th>Date</th></tr></thead>
+            <thead><tr><th>Item</th><th>Type</th><th>Qty</th><th>Reason</th><th>Date</th></tr></thead>
             <tbody></tbody>
           </table>
         </div>
       </section>
 
+      <!-- CATEGORIES -->
       <section id="page-categories" class="page">
         <div class="page-header"><h2 class="page-title">Categories</h2><button class="btn-primary" id="addCategoryBtn">+ Add Category</button></div>
         <div class="card-grid" id="categoriesGrid"></div>
       </section>
 
+      <!-- SUPPLIERS -->
       <section id="page-suppliers" class="page">
         <div class="page-header"><h2 class="page-title">Suppliers</h2><button class="btn-primary" id="addSupplierBtn">+ Add Supplier</button></div>
         <div class="table-wrap">
@@ -125,6 +132,7 @@
         </div>
       </section>
 
+      <!-- REPORTS -->
       <section id="page-reports" class="page">
         <h2 class="page-title">Reports &amp; Analytics</h2>
         <div class="grid-2">
@@ -135,23 +143,6 @@
           <div class="stat-card green"><div class="stat-num" id="reportStockIn">0</div><div class="stat-label">Stock In (30 days)</div></div>
           <div class="stat-card red"><div class="stat-num" id="reportStockOut">0</div><div class="stat-label">Stock Out (30 days)</div></div>
           <div class="stat-card dark"><div class="stat-num" id="reportTotalValue">₱0</div><div class="stat-label">Total Inventory Value</div></div>
-        </div>
-      </section>
-
-      <section id="page-users" class="page">
-        <div class="page-header"><h2 class="page-title">Users &amp; Activity Logs</h2><button class="btn-primary" id="addUserBtn">+ Add User</button></div>
-        <div class="table-wrap">
-          <table class="data-table" id="usersTable">
-            <thead><tr><th>Username</th><th>Full Name</th><th>Role</th><th>Status</th><th>Last Login</th><th>Actions</th></tr></thead>
-            <tbody></tbody>
-          </table>
-        </div>
-        <h3 style="margin-top:24px;">Activity Logs</h3>
-        <div class="table-wrap">
-          <table class="data-table" id="logsTable">
-            <thead><tr><th>User</th><th>Action</th><th>Details</th><th>Timestamp</th></tr></thead>
-            <tbody></tbody>
-          </table>
         </div>
       </section>
 
