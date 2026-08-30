@@ -1,43 +1,29 @@
 // ============================================================
-// McDonald's Inventory System — Firebase-backed client app
+// McDonald's Inventory System — client app
+// Backend/database: Google Apps Script + Google Sheets (see config.js)
+// Single admin account, login only.
 // ============================================================
-import { firebaseConfig } from './firebase-config.js';
-import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-import {
-  getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged,
-  updatePassword, EmailAuthProvider, reauthenticateWithCredential,
-  createUserWithEmailAndPassword
-} from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
-import {
-  getFirestore, collection, doc, getDoc, getDocs, addDoc, updateDoc,
-  deleteDoc, setDoc, query, orderBy, serverTimestamp, where
-} from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
-// Fail loudly and clearly if firebase-config.js still has placeholder values,
-// instead of letting Firebase throw a cryptic "invalid-api-key" error later.
-if (!firebaseConfig.apiKey || firebaseConfig.apiKey === 'YOUR_API_KEY') {
-  document.addEventListener('DOMContentLoaded', () => {
-    document.getElementById('loginScreen').innerHTML = `
-      <div class="login-card">
-        <div class="login-logo"><div class="arch">!</div><h1>Setup needed</h1></div>
-        <p style="font-size:13.5px;color:#7a7a7a;line-height:1.6;">
-          <code>firebase-config.js</code> still has placeholder values.
-          Open Firebase Console &rarr; Project settings &rarr; General &rarr; Your apps,
-          copy your web app's config object, and paste it into <code>firebase-config.js</code>.
-          See <strong>README.md</strong> for step-by-step instructions.
-        </p>
-      </div>`;
-  });
-  throw new Error('firebase-config.js is not configured yet.');
-}
-
-const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbygTXhiPN74BZ0RL9qOYoYmuGUm5qsfNc3zFKGVRJgjMkJAfEhcX6ksvmYXp5MNelid/exec";
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app);
-
-let CURRENT = { uid: null, email: null, fullName: '', role: 'staff' };
+let SESSION = { token: null, user: null };
 let CACHE = { categories: [], suppliers: [], inventory: [] };
+
+// ===================== CORE API CALL =====================
+// Content-Type: text/plain keeps this a CORS "simple request" (no preflight),
+// since Apps Script Web Apps can't respond to an OPTIONS preflight call.
+async function apiCall(action, args) {
+  if (!APPS_SCRIPT_URL || APPS_SCRIPT_URL.indexOf('PASTE_YOUR') !== -1) {
+    throw new Error('config.js is not set up yet — paste your Apps Script Web App URL in there.');
+  }
+  const res = await fetch(APPS_SCRIPT_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify({ action, args: args || [] })
+  });
+  if (!res.ok) throw new Error('Network error (' + res.status + '). Please try again.');
+  const json = await res.json();
+  if (json.error) throw new Error(json.error);
+  return json.data;
+}
 
 // ===================== UTILITIES =====================
 function showToast(msg, type) {
@@ -49,10 +35,10 @@ function showToast(msg, type) {
 function fmtMoney(n) {
   return '₱' + Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
-function fmtDate(ts) {
-  if (!ts) return '-';
-  const d = ts.toDate ? ts.toDate() : new Date(ts);
-  if (isNaN(d)) return '-';
+function fmtDate(v) {
+  if (!v) return '-';
+  const d = new Date(v);
+  if (isNaN(d)) return String(v);
   return d.toLocaleString();
 }
 function closeModal() {
@@ -63,34 +49,15 @@ function openModal(html) {
   document.getElementById('modalBox').innerHTML = html;
   document.getElementById('modalOverlay').classList.add('open');
 }
-async function logActivity(action, details) {
-  try {
-    await addDoc(collection(db, 'activityLogs'), {
-      user: CURRENT.email, action, details: details || '', timestamp: serverTimestamp()
-    });
-  } catch (e) { /* non-blocking */ }
-}
 function handleError(err) {
   console.error(err);
-  showToast(friendlyAuthError(err), 'error');
-}
-function friendlyAuthError(err) {
-  const code = err && err.code || '';
-  const map = {
-    'auth/invalid-credential': 'Invalid email or password.',
-    'auth/user-not-found': 'Invalid email or password.',
-    'auth/wrong-password': 'Invalid email or password.',
-    'auth/too-many-requests': 'Too many attempts. Please wait and try again.',
-    'auth/email-already-in-use': 'That email is already registered.',
-    'auth/weak-password': 'Password must be at least 6 characters.'
-  };
-  return map[code] || (err && err.message) || 'Something went wrong.';
+  showToast(err.message || 'Something went wrong.', 'error');
 }
 
 // ===================== LOGIN =====================
 document.getElementById('loginForm').addEventListener('submit', async (e) => {
   e.preventDefault();
-  const email = document.getElementById('email').value.trim();
+  const username = document.getElementById('username').value.trim();
   const password = document.getElementById('password').value;
   const errBox = document.getElementById('loginError');
   const btn = document.getElementById('loginBtn');
@@ -98,53 +65,43 @@ document.getElementById('loginForm').addEventListener('submit', async (e) => {
   btn.disabled = true; btn.textContent = 'Logging in...';
 
   try {
-    await signInWithEmailAndPassword(auth, email, password);
-    // onAuthStateChanged will handle entering the app
+    const res = await apiCall('apiLogin', [username, password]);
+    SESSION.token = res.token;
+    SESSION.user = res.user;
+    sessionStorage.setItem('mcdo_token', res.token);
+    sessionStorage.setItem('mcdo_user', JSON.stringify(res.user));
+    enterApp();
   } catch (err) {
-    errBox.textContent = friendlyAuthError(err);
+    errBox.textContent = err.message || 'Login failed.';
     errBox.style.display = 'block';
   } finally {
     btn.disabled = false; btn.textContent = 'Log In';
   }
 });
 
-onAuthStateChanged(auth, async (user) => {
-  if (!user) {
-    document.getElementById('loginScreen').style.display = 'flex';
-    document.getElementById('appShell').style.display = 'none';
-    return;
+function tryRestoreSession() {
+  const token = sessionStorage.getItem('mcdo_token');
+  const user = sessionStorage.getItem('mcdo_user');
+  if (token && user) {
+    SESSION.token = token;
+    SESSION.user = JSON.parse(user);
+    enterApp();
   }
-  // Load role/profile from Firestore "users" collection (doc id = uid)
-  const profileSnap = await getDoc(doc(db, 'users', user.uid));
-  if (!profileSnap.exists()) {
-    showToast('No profile found for this account. Ask an administrator to set one up.', 'error');
-    await signOut(auth);
-    return;
-  }
-  const profile = profileSnap.data();
-  if (profile.status === 'disabled') {
-    showToast('This account has been disabled.', 'error');
-    await signOut(auth);
-    return;
-  }
-  CURRENT = { uid: user.uid, email: user.email, fullName: profile.fullName || user.email, role: profile.role || 'staff' };
-  enterApp();
-  logActivity('LOGIN', 'User logged in');
-});
+}
 
 function enterApp() {
   document.getElementById('loginScreen').style.display = 'none';
   document.getElementById('appShell').style.display = 'block';
-  document.getElementById('userFullName').textContent = CURRENT.fullName;
-  document.getElementById('userRole').textContent = CURRENT.role;
-  document.getElementById('userInitial').textContent = CURRENT.fullName.charAt(0).toUpperCase();
-  document.getElementById('navUsers').style.display = CURRENT.role === 'admin' ? '' : 'none';
+  document.getElementById('userFullName').textContent = SESSION.user.fullName;
+  document.getElementById('userInitial').textContent = SESSION.user.fullName.charAt(0).toUpperCase();
   loadDashboard();
 }
 
 async function doLogout() {
-  await logActivity('LOGOUT', 'User logged out');
-  await signOut(auth);
+  try { await apiCall('apiLogout', [SESSION.token]); } catch (e) { /* ignore */ }
+  sessionStorage.removeItem('mcdo_token');
+  sessionStorage.removeItem('mcdo_user');
+  location.reload();
 }
 document.getElementById('logoutBtn').addEventListener('click', doLogout);
 document.getElementById('logoutBtnMobile').addEventListener('click', doLogout);
@@ -165,10 +122,7 @@ document.getElementById('changePwBtn').addEventListener('click', () => {
     const oldPw = document.getElementById('oldPw').value;
     const newPw = document.getElementById('newPw').value;
     try {
-      const cred = EmailAuthProvider.credential(CURRENT.email, oldPw);
-      await reauthenticateWithCredential(auth.currentUser, cred);
-      await updatePassword(auth.currentUser, newPw);
-      await logActivity('CHANGE_PASSWORD', 'Password updated');
+      await apiCall('apiChangePassword', [SESSION.token, oldPw, newPw]);
       showToast('Password updated successfully.', 'success');
       closeModal();
     } catch (err) { handleError(err); }
@@ -195,7 +149,6 @@ function loadPage(page) {
   else if (page === 'categories') loadCategories();
   else if (page === 'suppliers') loadSuppliers();
   else if (page === 'reports') loadReports();
-  else if (page === 'users') { loadUsers(); loadLogs(); }
 }
 const sidebar = document.getElementById('sidebar');
 const overlay = document.getElementById('sidebarOverlay');
@@ -203,45 +156,29 @@ document.getElementById('hamburgerBtn').addEventListener('click', () => { sideba
 overlay.addEventListener('click', closeSidebar);
 function closeSidebar() { sidebar.classList.remove('open'); overlay.classList.remove('open'); }
 
-// ===================== FIRESTORE HELPERS =====================
-async function fetchAll(colName, order) {
-  const ref = collection(db, colName);
-  const q = order ? query(ref, orderBy(order, 'desc')) : ref;
-  const snap = await getDocs(q);
-  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
-}
-
 // ===================== DASHBOARD =====================
 async function loadDashboard() {
   try {
-    const [inventory, movements, suppliers, categories] = await Promise.all([
-      fetchAll('inventory'), fetchAll('stockMovements', 'timestamp'), fetchAll('suppliers'), fetchAll('categories')
-    ]);
-    CACHE.inventory = inventory;
-    const lowStock = inventory.filter(i => Number(i.quantity) <= Number(i.reorderLevel));
-    const totalValue = inventory.reduce((s, i) => s + Number(i.quantity) * Number(i.unitPrice), 0);
-    const today = new Date(); today.setHours(0, 0, 0, 0);
-    const todaysMovements = movements.filter(m => m.timestamp && m.timestamp.toDate && m.timestamp.toDate() >= today);
+    const d = await apiCall('apiGetDashboardStats', [SESSION.token]);
+    document.getElementById('statTotalItems').textContent = d.totalItems;
+    document.getElementById('statLowStock').textContent = d.lowStockCount;
+    document.getElementById('statValue').textContent = fmtMoney(d.totalValue);
+    document.getElementById('statMovements').textContent = d.todaysMovementsCount;
 
-    document.getElementById('statTotalItems').textContent = inventory.length;
-    document.getElementById('statLowStock').textContent = lowStock.length;
-    document.getElementById('statValue').textContent = fmtMoney(totalValue);
-    document.getElementById('statMovements').textContent = todaysMovements.length;
-
-    document.getElementById('lowStockList').innerHTML = lowStock.length
-      ? lowStock.slice(0, 8).map(i => `<div class="list-row"><span>${i.name}</span><span class="badge low">${i.quantity} ${i.unit}</span></div>`).join('')
+    document.getElementById('lowStockList').innerHTML = d.lowStockItems.length
+      ? d.lowStockItems.map(i => `<div class="list-row"><span>${i.name}</span><span class="badge low">${i.quantity} ${i.unit}</span></div>`).join('')
       : '<div class="empty-msg">No low stock items. Great job!</div>';
 
-    document.getElementById('recentMovementsList').innerHTML = movements.length
-      ? movements.slice(0, 6).map(m => `<div class="list-row"><span>${m.itemName} (${m.quantity})</span><span class="badge ${m.type === 'IN' ? 'in' : 'out'}">${m.type}</span></div>`).join('')
+    document.getElementById('recentMovementsList').innerHTML = d.recentMovements.length
+      ? d.recentMovements.map(m => `<div class="list-row"><span>${m.itemName} (${m.quantity})</span><span class="badge ${m.type === 'IN' ? 'in' : 'out'}">${m.type}</span></div>`).join('')
       : '<div class="empty-msg">No recent movements.</div>';
   } catch (err) { handleError(err); }
 }
 
-// ===================== INVENTORY =====================
+// ===================== INVENTORY (CRUD) =====================
 async function loadInventory() {
   try {
-    const items = await fetchAll('inventory');
+    const items = await apiCall('apiGetInventory', [SESSION.token]);
     CACHE.inventory = items;
     const tbody = document.querySelector('#inventoryTable tbody');
     tbody.innerHTML = items.length ? items.map(i => {
@@ -253,7 +190,7 @@ async function loadInventory() {
         <td>${fmtDate(i.lastUpdated)}</td>
         <td><button class="btn-sm edit" data-edit="${i.id}">Edit</button><button class="btn-sm danger" data-del="${i.id}">Delete</button></td>
       </tr>`;
-    }).join('') : '<tr><td colspan="10" class="empty-msg">No inventory items yet.</td></tr>';
+    }).join('') : '<tr><td colspan="10" class="empty-msg">No inventory items yet. Click "+ Add Item" to get started.</td></tr>';
 
     tbody.querySelectorAll('[data-edit]').forEach(b => b.addEventListener('click', () => openEditItem(b.dataset.edit)));
     tbody.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', () => deleteItem(b.dataset.del)));
@@ -267,7 +204,10 @@ function supplierOptions(selected) {
   return '<option value="">- None -</option>' + CACHE.suppliers.map(s => `<option value="${s.name}" ${s.name === selected ? 'selected' : ''}>${s.name}</option>`).join('');
 }
 async function ensureLookupsLoaded() {
-  [CACHE.categories, CACHE.suppliers] = await Promise.all([fetchAll('categories'), fetchAll('suppliers')]);
+  [CACHE.categories, CACHE.suppliers] = await Promise.all([
+    apiCall('apiGetCategories', [SESSION.token]),
+    apiCall('apiGetSuppliers', [SESSION.token])
+  ]);
 }
 
 function itemFormHtml(item) {
@@ -290,20 +230,19 @@ function itemFormHtml(item) {
 }
 
 document.getElementById('addItemBtn').addEventListener('click', async () => {
-  await ensureLookupsLoaded();
-  openModal(itemFormHtml());
-  bindItemForm(null);
+  try { await ensureLookupsLoaded(); openModal(itemFormHtml()); bindItemForm(null); }
+  catch (err) { handleError(err); }
 });
 async function openEditItem(id) {
   const item = CACHE.inventory.find(i => i.id === id);
-  await ensureLookupsLoaded();
-  openModal(itemFormHtml(item));
-  bindItemForm(item);
+  try { await ensureLookupsLoaded(); openModal(itemFormHtml(item)); bindItemForm(item); }
+  catch (err) { handleError(err); }
 }
 function bindItemForm(existingItem) {
   document.getElementById('itemForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const payload = {
+      id: existingItem ? existingItem.id : undefined,
       name: document.getElementById('f_name').value.trim(),
       category: document.getElementById('f_category').value,
       sku: document.getElementById('f_sku').value.trim(),
@@ -311,16 +250,11 @@ function bindItemForm(existingItem) {
       unit: document.getElementById('f_unit').value.trim(),
       reorderLevel: Number(document.getElementById('f_reorder').value) || 0,
       unitPrice: Number(document.getElementById('f_price').value) || 0,
-      supplier: document.getElementById('f_supplier').value,
-      lastUpdated: serverTimestamp()
+      supplier: document.getElementById('f_supplier').value
     };
+    const action = existingItem ? 'apiUpdateInventoryItem' : 'apiAddInventoryItem';
     try {
-      if (existingItem) {
-        await updateDoc(doc(db, 'inventory', existingItem.id), payload);
-      } else {
-        await addDoc(collection(db, 'inventory'), payload);
-      }
-      await logActivity(existingItem ? 'UPDATE_ITEM' : 'ADD_ITEM', payload.name);
+      await apiCall(action, [SESSION.token, payload]);
       showToast('Item saved.', 'success');
       closeModal();
       loadInventory();
@@ -330,9 +264,7 @@ function bindItemForm(existingItem) {
 async function deleteItem(id) {
   if (!confirm('Delete this inventory item? This cannot be undone.')) return;
   try {
-    const item = CACHE.inventory.find(i => i.id === id);
-    await deleteDoc(doc(db, 'inventory', id));
-    await logActivity('DELETE_ITEM', item ? item.name : id);
+    await apiCall('apiDeleteInventoryItem', [SESSION.token, id]);
     showToast('Item deleted.', 'success');
     loadInventory();
   } catch (err) { handleError(err); }
@@ -341,61 +273,57 @@ async function deleteItem(id) {
 // ===================== STOCK MOVEMENTS =====================
 async function loadMovements() {
   try {
-    const rows = await fetchAll('stockMovements', 'timestamp');
+    const rows = await apiCall('apiGetStockMovements', [SESSION.token]);
     const tbody = document.querySelector('#movementsTable tbody');
     tbody.innerHTML = rows.length ? rows.map(m => `<tr>
         <td>${m.itemName}</td><td><span class="badge ${m.type === 'IN' ? 'in' : 'out'}">${m.type}</span></td>
-        <td>${m.quantity}</td><td>${m.reason || '-'}</td><td>${m.user}</td><td>${fmtDate(m.timestamp)}</td>
-      </tr>`).join('') : '<tr><td colspan="6" class="empty-msg">No stock movements recorded yet.</td></tr>';
+        <td>${m.quantity}</td><td>${m.reason || '-'}</td><td>${fmtDate(m.timestamp)}</td>
+      </tr>`).join('') : '<tr><td colspan="5" class="empty-msg">No stock movements recorded yet.</td></tr>';
   } catch (err) { handleError(err); }
 }
 
 document.getElementById('addMovementBtn').addEventListener('click', async () => {
-  const items = await fetchAll('inventory');
-  CACHE.inventory = items;
-  const options = items.map(i => `<option value="${i.id}">${i.name} (current: ${i.quantity} ${i.unit})</option>`).join('');
-  openModal(`<h3>Record Stock Movement</h3>
-    <form id="movForm">
-      <div class="field"><label>Item</label><select id="m_item" required>${options}</select></div>
-      <div class="field"><label>Movement Type</label>
-        <select id="m_type"><option value="IN">Stock In (received)</option><option value="OUT">Stock Out (used/sold)</option></select></div>
-      <div class="field"><label>Quantity</label><input type="number" id="m_qty" min="1" required></div>
-      <div class="field"><label>Reason / Notes</label><input type="text" id="m_reason" placeholder="e.g. Delivery, wastage, daily usage"></div>
-      <div class="modal-actions">
-        <button type="button" class="btn-secondary" onclick="closeModal()">Cancel</button>
-        <button type="submit" class="btn-primary">Save</button>
-      </div>
-    </form>`);
+  try {
+    const items = await apiCall('apiGetInventory', [SESSION.token]);
+    CACHE.inventory = items;
+    const options = items.map(i => `<option value="${i.id}">${i.name} (current: ${i.quantity} ${i.unit})</option>`).join('');
+    openModal(`<h3>Record Stock Movement</h3>
+      <form id="movForm">
+        <div class="field"><label>Item</label><select id="m_item" required>${options}</select></div>
+        <div class="field"><label>Movement Type</label>
+          <select id="m_type"><option value="IN">Stock In (received)</option><option value="OUT">Stock Out (used/sold/wastage)</option></select></div>
+        <div class="field"><label>Quantity</label><input type="number" id="m_qty" min="1" required></div>
+        <div class="field"><label>Reason / Notes</label><input type="text" id="m_reason" placeholder="e.g. Delivery, wastage, daily usage"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn-secondary" onclick="closeModal()">Cancel</button>
+          <button type="submit" class="btn-primary">Save</button>
+        </div>
+      </form>`);
 
-  document.getElementById('movForm').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const itemId = document.getElementById('m_item').value;
-    const item = items.find(i => i.id === itemId);
-    const type = document.getElementById('m_type').value;
-    const qty = Number(document.getElementById('m_qty').value);
-    const reason = document.getElementById('m_reason').value.trim();
-
-    try {
-      const currentQty = Number(item.quantity);
-      const newQty = type === 'IN' ? currentQty + qty : currentQty - qty;
-      if (newQty < 0) { showToast('Insufficient stock. Current quantity is ' + currentQty + '.', 'error'); return; }
-
-      await updateDoc(doc(db, 'inventory', itemId), { quantity: newQty, lastUpdated: serverTimestamp() });
-      await addDoc(collection(db, 'stockMovements'), {
-        itemId, itemName: item.name, type, quantity: qty, reason, user: CURRENT.email, timestamp: serverTimestamp()
-      });
-      await logActivity('STOCK_' + type, `${item.name} qty ${qty}`);
-      showToast(item.name + ' stock updated.', 'success');
-      closeModal();
-      loadMovements();
-    } catch (err) { handleError(err); }
-  });
+    document.getElementById('movForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const itemId = document.getElementById('m_item').value;
+      const item = items.find(i => i.id === itemId);
+      const payload = {
+        itemId: itemId,
+        type: document.getElementById('m_type').value,
+        quantity: Number(document.getElementById('m_qty').value),
+        reason: document.getElementById('m_reason').value.trim()
+      };
+      try {
+        await apiCall('apiAddStockMovement', [SESSION.token, payload]);
+        showToast(item.name + ' stock updated.', 'success');
+        closeModal();
+        loadMovements();
+      } catch (err) { handleError(err); }
+    });
+  } catch (err) { handleError(err); }
 });
 
 // ===================== CATEGORIES =====================
 async function loadCategories() {
   try {
-    const cats = await fetchAll('categories');
+    const cats = await apiCall('apiGetCategories', [SESSION.token]);
     CACHE.categories = cats;
     const grid = document.getElementById('categoriesGrid');
     grid.innerHTML = cats.length ? cats.map(c => `
@@ -417,11 +345,9 @@ document.getElementById('addCategoryBtn').addEventListener('click', () => {
     </form>`);
   document.getElementById('catForm').addEventListener('submit', async (e) => {
     e.preventDefault();
-    const name = document.getElementById('c_name').value.trim();
-    const description = document.getElementById('c_desc').value.trim();
+    const payload = { name: document.getElementById('c_name').value.trim(), description: document.getElementById('c_desc').value.trim() };
     try {
-      await addDoc(collection(db, 'categories'), { name, description });
-      await logActivity('ADD_CATEGORY', name);
+      await apiCall('apiAddCategory', [SESSION.token, payload]);
       showToast('Category added.', 'success');
       closeModal();
       loadCategories();
@@ -431,8 +357,7 @@ document.getElementById('addCategoryBtn').addEventListener('click', () => {
 async function deleteCategory(id) {
   if (!confirm('Delete this category?')) return;
   try {
-    await deleteDoc(doc(db, 'categories', id));
-    await logActivity('DELETE_CATEGORY', id);
+    await apiCall('apiDeleteCategory', [SESSION.token, id]);
     showToast('Category deleted.', 'success');
     loadCategories();
   } catch (err) { handleError(err); }
@@ -441,7 +366,7 @@ async function deleteCategory(id) {
 // ===================== SUPPLIERS =====================
 async function loadSuppliers() {
   try {
-    const rows = await fetchAll('suppliers');
+    const rows = await apiCall('apiGetSuppliers', [SESSION.token]);
     CACHE.suppliers = rows;
     const tbody = document.querySelector('#suppliersTable tbody');
     tbody.innerHTML = rows.length ? rows.map(s => `<tr>
@@ -478,16 +403,16 @@ function bindSupplierForm(existing) {
   document.getElementById('supForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const payload = {
+      id: existing ? existing.id : undefined,
       name: document.getElementById('s_name').value.trim(),
       contactPerson: document.getElementById('s_contact').value.trim(),
       phone: document.getElementById('s_phone').value.trim(),
       email: document.getElementById('s_email').value.trim(),
       address: document.getElementById('s_address').value.trim()
     };
+    const action = existing ? 'apiUpdateSupplier' : 'apiAddSupplier';
     try {
-      if (existing) await updateDoc(doc(db, 'suppliers', existing.id), payload);
-      else await addDoc(collection(db, 'suppliers'), payload);
-      await logActivity(existing ? 'UPDATE_SUPPLIER' : 'ADD_SUPPLIER', payload.name);
+      await apiCall(action, [SESSION.token, payload]);
       showToast('Supplier saved.', 'success');
       closeModal();
       loadSuppliers();
@@ -497,8 +422,7 @@ function bindSupplierForm(existing) {
 async function deleteSupplier(id) {
   if (!confirm('Delete this supplier?')) return;
   try {
-    await deleteDoc(doc(db, 'suppliers', id));
-    await logActivity('DELETE_SUPPLIER', id);
+    await apiCall('apiDeleteSupplier', [SESSION.token, id]);
     showToast('Supplier deleted.', 'success');
     loadSuppliers();
   } catch (err) { handleError(err); }
@@ -507,106 +431,24 @@ async function deleteSupplier(id) {
 // ===================== REPORTS =====================
 async function loadReports() {
   try {
-    const [inventory, movements] = await Promise.all([fetchAll('inventory'), fetchAll('stockMovements', 'timestamp')]);
-    const lowStock = inventory.filter(i => Number(i.quantity) <= Number(i.reorderLevel));
-    const valueByCategory = {};
-    inventory.forEach(i => { valueByCategory[i.category] = (valueByCategory[i.category] || 0) + Number(i.quantity) * Number(i.unitPrice); });
-
-    const thirtyDaysAgo = new Date(); thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-    const recent = movements.filter(m => m.timestamp && m.timestamp.toDate && m.timestamp.toDate() >= thirtyDaysAgo);
-    const stockIn = recent.filter(m => m.type === 'IN').reduce((s, m) => s + Number(m.quantity), 0);
-    const stockOut = recent.filter(m => m.type === 'OUT').reduce((s, m) => s + Number(m.quantity), 0);
-    const totalValue = inventory.reduce((s, i) => s + Number(i.quantity) * Number(i.unitPrice), 0);
-
-    document.getElementById('reportLowStock').innerHTML = lowStock.length
-      ? lowStock.map(i => `<div class="list-row"><span>${i.name}</span><span class="badge low">${i.quantity} ${i.unit}</span></div>`).join('')
+    const r = await apiCall('apiGetReports', [SESSION.token]);
+    document.getElementById('reportLowStock').innerHTML = r.lowStock.length
+      ? r.lowStock.map(i => `<div class="list-row"><span>${i.name}</span><span class="badge low">${i.quantity} ${i.unit}</span></div>`).join('')
       : '<div class="empty-msg">No low stock items.</div>';
 
-    const cats = Object.keys(valueByCategory);
+    const cats = Object.keys(r.valueByCategory);
     document.getElementById('reportByCategory').innerHTML = cats.length
-      ? cats.map(c => `<div class="list-row"><span>${c}</span><span>${fmtMoney(valueByCategory[c])}</span></div>`).join('')
+      ? cats.map(c => `<div class="list-row"><span>${c}</span><span>${fmtMoney(r.valueByCategory[c])}</span></div>`).join('')
       : '<div class="empty-msg">No data yet.</div>';
 
-    document.getElementById('reportStockIn').textContent = stockIn;
-    document.getElementById('reportStockOut').textContent = stockOut;
-    document.getElementById('reportTotalValue').textContent = fmtMoney(totalValue);
-  } catch (err) { handleError(err); }
-}
-
-// ===================== USERS & LOGS (admin only) =====================
-async function loadUsers() {
-  if (CURRENT.role !== 'admin') return;
-  try {
-    const rows = await fetchAll('users');
-    const tbody = document.querySelector('#usersTable tbody');
-    tbody.innerHTML = rows.length ? rows.map(u => `<tr>
-        <td>${u.email || '-'}</td><td>${u.fullName || '-'}</td><td>${u.role}</td><td>${u.status}</td>
-        <td><button class="btn-sm toggle" data-toggle="${u.id}" data-status="${u.status}">${u.status === 'active' ? 'Disable' : 'Enable'}</button></td>
-      </tr>`).join('') : '<tr><td colspan="5" class="empty-msg">No users found.</td></tr>';
-    tbody.querySelectorAll('[data-toggle]').forEach(b => b.addEventListener('click', () => toggleUser(b.dataset.toggle, b.dataset.status)));
-  } catch (err) { handleError(err); }
-}
-async function loadLogs() {
-  if (CURRENT.role !== 'admin') return;
-  try {
-    const rows = await fetchAll('activityLogs', 'timestamp');
-    const tbody = document.querySelector('#logsTable tbody');
-    tbody.innerHTML = rows.length ? rows.slice(0, 200).map(l => `<tr>
-        <td>${l.user}</td><td>${l.action}</td><td>${l.details || '-'}</td><td>${fmtDate(l.timestamp)}</td>
-      </tr>`).join('') : '<tr><td colspan="4" class="empty-msg">No activity logs yet.</td></tr>';
-  } catch (err) { handleError(err); }
-}
-
-document.getElementById('addUserBtn').addEventListener('click', () => {
-  openModal(`<h3>Add User</h3>
-    <form id="userForm">
-      <div class="field"><label>Email</label><input type="email" id="u_email" required></div>
-      <div class="field"><label>Full Name</label><input type="text" id="u_fullname" required></div>
-      <div class="field"><label>Role</label><select id="u_role"><option value="staff">Staff</option><option value="admin">Admin</option></select></div>
-      <div class="field"><label>Temporary Password</label><input type="password" id="u_password" required minlength="6"></div>
-      <div class="modal-actions">
-        <button type="button" class="btn-secondary" onclick="closeModal()">Cancel</button>
-        <button type="submit" class="btn-primary">Create</button>
-      </div>
-    </form>
-    <p style="font-size:12px;color:#7a7a7a;margin-top:10px;">Note: creating a user uses a secondary sign-in session so your own admin session stays active.</p>`);
-
-  document.getElementById('userForm').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const email = document.getElementById('u_email').value.trim();
-    const fullName = document.getElementById('u_fullname').value.trim();
-    const role = document.getElementById('u_role').value;
-    const password = document.getElementById('u_password').value;
-
-    try {
-      // Use a secondary, temporary Firebase app instance so creating the new
-      // auth user doesn't sign the current admin out of their own session.
-      const { initializeApp: initSecondary, deleteApp } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js");
-      const secondaryApp = initSecondary(firebaseConfig, 'secondary-' + Date.now());
-      const secondaryAuth = getAuth(secondaryApp);
-      const cred = await createUserWithEmailAndPassword(secondaryAuth, email, password);
-      await setDoc(doc(db, 'users', cred.user.uid), { email, fullName, role, status: 'active' });
-      await signOut(secondaryAuth);
-      await deleteApp(secondaryApp);
-
-      await logActivity('ADD_USER', 'Created user: ' + email);
-      showToast('User created.', 'success');
-      closeModal();
-      loadUsers();
-    } catch (err) { handleError(err); }
-  });
-});
-
-async function toggleUser(id, currentStatus) {
-  if (!confirm("Change this user's active status?")) return;
-  try {
-    const newStatus = currentStatus === 'active' ? 'disabled' : 'active';
-    await updateDoc(doc(db, 'users', id), { status: newStatus });
-    await logActivity('TOGGLE_USER_STATUS', id + ' -> ' + newStatus);
-    showToast('User status updated.', 'success');
-    loadUsers();
+    document.getElementById('reportStockIn').textContent = r.stockIn30d;
+    document.getElementById('reportStockOut').textContent = r.stockOut30d;
+    document.getElementById('reportTotalValue').textContent = fmtMoney(r.totalInventoryValue);
   } catch (err) { handleError(err); }
 }
 
 // expose functions used via inline onclick= in modal HTML
 window.closeModal = closeModal;
+
+// ===================== INIT =====================
+tryRestoreSession();
