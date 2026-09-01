@@ -17,8 +17,10 @@
       <div class="login-logo">
         <div class="arch">M</div>
         <h1>McDonald's</h1>
-        <p>Store Inventory System</p>
+        <p id="authSubtitle">Store Inventory System</p>
       </div>
+
+      <!-- STEP 1: username + password -->
       <form id="loginForm" autocomplete="off">
         <div class="field">
           <label for="username">Username</label>
@@ -31,7 +33,21 @@
         <div id="loginError" class="error-msg" style="display:none;"></div>
         <button type="submit" class="btn-primary" id="loginBtn">Log In</button>
       </form>
-      <p class="login-hint">Default admin: <strong>admin / admin123</strong> — change this after your first login.</p>
+
+      <!-- STEP 2: OTP code (shown only when the account has a security email set) -->
+      <form id="otpForm" autocomplete="off" style="display:none;">
+        <p class="otp-hint">We sent a 6-digit code to <strong id="otpMaskedEmail"></strong>.</p>
+        <div class="field">
+          <label for="otpCode">Verification Code</label>
+          <input type="text" id="otpCode" inputmode="numeric" pattern="[0-9]*" maxlength="6" required placeholder="000000" class="otp-input">
+        </div>
+        <div id="otpError" class="error-msg" style="display:none;"></div>
+        <button type="submit" class="btn-primary" id="otpBtn">Verify &amp; Log In</button>
+        <button type="button" class="link-btn-inline" id="resendOtpBtn" style="margin-top:12px;">Resend code</button>
+        <button type="button" class="link-btn-inline" id="backToLoginBtn" style="margin-top:12px;">Use a different account</button>
+      </form>
+
+      <p class="login-hint" id="loginModeHint">Default admin: <strong>admin / Admin@12345</strong></p>
     </div>
   </div>
 
@@ -60,6 +76,8 @@
         <li><a href="#" class="nav-link" data-page="categories"><span class="ic">&#127991;</span> Categories</a></li>
         <li><a href="#" class="nav-link" data-page="suppliers"><span class="ic">&#128666;</span> Suppliers</a></li>
         <li><a href="#" class="nav-link" data-page="reports"><span class="ic">&#128202;</span> Reports</a></li>
+        <li data-role="admin"><a href="#" class="nav-link" data-page="approvals"><span class="ic">&#9989;</span> Pending Approvals</a></li>
+        <li data-role="admin"><a href="#" class="nav-link" data-page="users"><span class="ic">&#128100;</span> Users &amp; Logs</a></li>
       </ul>
 
       <div class="sidebar-footer">
@@ -67,10 +85,10 @@
           <div class="avatar" id="userInitial">A</div>
           <div>
             <div id="userFullName" class="u-name">-</div>
-            <div class="u-role">Administrator</div>
+            <div id="userRole" class="u-role">-</div>
           </div>
         </div>
-        <button id="changePwBtn" class="link-btn">Change Password</button>
+        <button id="securityBtn" class="link-btn">Account &amp; Security</button>
         <button id="logoutBtn" class="btn-secondary">Log Out</button>
       </div>
     </nav>
@@ -93,7 +111,7 @@
         </div>
       </section>
 
-      <!-- INVENTORY (core CRUD) -->
+      <!-- INVENTORY -->
       <section id="page-inventory" class="page">
         <div class="page-header"><h2 class="page-title">Inventory</h2><button class="btn-primary" id="addItemBtn">+ Add Item</button></div>
         <div class="table-wrap">
@@ -109,7 +127,7 @@
         <div class="page-header"><h2 class="page-title">Stock In / Out</h2><button class="btn-primary" id="addMovementBtn">+ Record Movement</button></div>
         <div class="table-wrap">
           <table class="data-table" id="movementsTable">
-            <thead><tr><th>Item</th><th>Type</th><th>Qty</th><th>Reason</th><th>Date</th></tr></thead>
+            <thead><tr><th>Item</th><th>Type</th><th>Qty</th><th>Reason</th><th>By</th><th>Date</th></tr></thead>
             <tbody></tbody>
           </table>
         </div>
@@ -117,13 +135,25 @@
 
       <!-- CATEGORIES -->
       <section id="page-categories" class="page">
-        <div class="page-header"><h2 class="page-title">Categories</h2><button class="btn-primary" id="addCategoryBtn">+ Add Category</button></div>
+        <div class="page-header">
+          <h2 class="page-title">Categories</h2>
+          <button class="btn-primary" id="addCategoryBtn">+ Add Category</button>
+        </div>
+        <p id="categoriesNote" class="role-note" style="display:none;">
+          As an Inventory Manager, adding or removing categories requires admin approval. Your request will be emailed to an administrator for OTP confirmation.
+        </p>
         <div class="card-grid" id="categoriesGrid"></div>
       </section>
 
       <!-- SUPPLIERS -->
       <section id="page-suppliers" class="page">
-        <div class="page-header"><h2 class="page-title">Suppliers</h2><button class="btn-primary" id="addSupplierBtn">+ Add Supplier</button></div>
+        <div class="page-header">
+          <h2 class="page-title">Suppliers</h2>
+          <button class="btn-primary" id="addSupplierBtn">+ Add Supplier</button>
+        </div>
+        <p id="suppliersNote" class="role-note" style="display:none;">
+          As an Inventory Manager, adding, editing, or removing suppliers requires admin approval via emailed OTP.
+        </p>
         <div class="table-wrap">
           <table class="data-table" id="suppliersTable">
             <thead><tr><th>Name</th><th>Contact</th><th>Phone</th><th>Email</th><th>Address</th><th>Actions</th></tr></thead>
@@ -143,6 +173,38 @@
           <div class="stat-card green"><div class="stat-num" id="reportStockIn">0</div><div class="stat-label">Stock In (30 days)</div></div>
           <div class="stat-card red"><div class="stat-num" id="reportStockOut">0</div><div class="stat-label">Stock Out (30 days)</div></div>
           <div class="stat-card dark"><div class="stat-num" id="reportTotalValue">₱0</div><div class="stat-label">Total Inventory Value</div></div>
+        </div>
+      </section>
+
+      <!-- PENDING APPROVALS (admin only) -->
+      <section id="page-approvals" class="page" data-role="admin">
+        <h2 class="page-title">Pending Approvals</h2>
+        <p class="role-note">Changes requested by Inventory Managers appear here. Approving requires the OTP emailed to your security address.</p>
+        <div id="approvalsList" class="card-grid"></div>
+      </section>
+
+      <!-- USERS & LOGS (admin only) -->
+      <section id="page-users" class="page" data-role="admin">
+        <div class="page-header"><h2 class="page-title">Users &amp; Activity Logs</h2><button class="btn-primary" id="addUserBtn">+ Add User</button></div>
+        <div class="table-wrap">
+          <table class="data-table" id="usersTable">
+            <thead><tr><th>Username</th><th>Full Name</th><th>Role</th><th>Status</th><th>Last Login</th><th>Actions</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <h3 style="margin-top:24px;">Activity Log</h3>
+        <div class="table-wrap">
+          <table class="data-table" id="logsTable">
+            <thead><tr><th>User</th><th>Action</th><th>Details</th><th>Timestamp</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <h3 style="margin-top:24px;">Configuration Audit Log</h3>
+        <div class="table-wrap">
+          <table class="data-table" id="auditTable">
+            <thead><tr><th>Action</th><th>Entity</th><th>Old Value</th><th>New Value</th><th>Requested By</th><th>Approved By</th><th>When</th></tr></thead>
+            <tbody></tbody>
+          </table>
         </div>
       </section>
 
