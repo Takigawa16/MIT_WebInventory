@@ -1,15 +1,15 @@
 // ============================================================
 // McDonald's Inventory System — client app
 // Backend/database: Google Apps Script + Google Sheets (see config.js)
-// Single admin account, login only.
+// Security: login OTP, role-based access (admin / inventory_manager),
+// OTP-gated config-change approvals with audit trail.
 // ============================================================
 
 let SESSION = { token: null, user: null };
 let CACHE = { categories: [], suppliers: [], inventory: [] };
+let PENDING_LOGIN = { tempToken: null };
 
 // ===================== CORE API CALL =====================
-// Content-Type: text/plain keeps this a CORS "simple request" (no preflight),
-// since Apps Script Web Apps can't respond to an OPTIONS preflight call.
 async function apiCall(action, args) {
   if (!APPS_SCRIPT_URL || APPS_SCRIPT_URL.indexOf('PASTE_YOUR') !== -1) {
     throw new Error('config.js is not set up yet — paste your Apps Script Web App URL in there.');
@@ -30,7 +30,7 @@ function showToast(msg, type) {
   const t = document.getElementById('toast');
   t.textContent = msg;
   t.className = 'toast show' + (type ? ' ' + type : '');
-  setTimeout(() => { t.className = 'toast'; }, 3200);
+  setTimeout(() => { t.className = 'toast'; }, 3500);
 }
 function fmtMoney(n) {
   return '₱' + Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -53,8 +53,9 @@ function handleError(err) {
   console.error(err);
   showToast(err.message || 'Something went wrong.', 'error');
 }
+function isAdmin() { return SESSION.user && SESSION.user.role === 'admin'; }
 
-// ===================== LOGIN =====================
+// ===================== LOGIN (2-step: password, then OTP) =====================
 document.getElementById('loginForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   const username = document.getElementById('username').value.trim();
@@ -66,11 +67,16 @@ document.getElementById('loginForm').addEventListener('submit', async (e) => {
 
   try {
     const res = await apiCall('apiLogin', [username, password]);
-    SESSION.token = res.token;
-    SESSION.user = res.user;
-    sessionStorage.setItem('mcdo_token', res.token);
-    sessionStorage.setItem('mcdo_user', JSON.stringify(res.user));
-    enterApp();
+    if (res.otpRequired) {
+      PENDING_LOGIN.tempToken = res.tempToken;
+      document.getElementById('loginForm').style.display = 'none';
+      document.getElementById('otpForm').style.display = 'block';
+      document.getElementById('loginModeHint').style.display = 'none';
+      document.getElementById('otpMaskedEmail').textContent = res.maskedEmail;
+      document.getElementById('authSubtitle').textContent = 'Verify it\'s really you';
+    } else {
+      startSession(res);
+    }
   } catch (err) {
     errBox.textContent = err.message || 'Login failed.';
     errBox.style.display = 'block';
@@ -78,6 +84,51 @@ document.getElementById('loginForm').addEventListener('submit', async (e) => {
     btn.disabled = false; btn.textContent = 'Log In';
   }
 });
+
+document.getElementById('otpForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const code = document.getElementById('otpCode').value.trim();
+  const errBox = document.getElementById('otpError');
+  const btn = document.getElementById('otpBtn');
+  errBox.style.display = 'none';
+  btn.disabled = true; btn.textContent = 'Verifying...';
+
+  try {
+    const res = await apiCall('apiVerifyOtp', [PENDING_LOGIN.tempToken, code]);
+    startSession(res);
+  } catch (err) {
+    errBox.textContent = err.message || 'Verification failed.';
+    errBox.style.display = 'block';
+  } finally {
+    btn.disabled = false; btn.textContent = 'Verify & Log In';
+  }
+});
+
+document.getElementById('resendOtpBtn').addEventListener('click', async () => {
+  try {
+    const res = await apiCall('apiResendOtp', [PENDING_LOGIN.tempToken]);
+    document.getElementById('otpMaskedEmail').textContent = res.maskedEmail;
+    showToast('A new code was sent.', 'success');
+  } catch (err) { handleError(err); }
+});
+
+document.getElementById('backToLoginBtn').addEventListener('click', () => {
+  PENDING_LOGIN.tempToken = null;
+  document.getElementById('otpForm').style.display = 'none';
+  document.getElementById('loginForm').style.display = 'block';
+  document.getElementById('loginModeHint').style.display = 'block';
+  document.getElementById('authSubtitle').textContent = 'Store Inventory System';
+  document.getElementById('otpCode').value = '';
+  document.getElementById('otpError').style.display = 'none';
+});
+
+function startSession(res) {
+  SESSION.token = res.token;
+  SESSION.user = res.user;
+  sessionStorage.setItem('mcdo_token', res.token);
+  sessionStorage.setItem('mcdo_user', JSON.stringify(res.user));
+  enterApp();
+}
 
 function tryRestoreSession() {
   const token = sessionStorage.getItem('mcdo_token');
@@ -93,7 +144,15 @@ function enterApp() {
   document.getElementById('loginScreen').style.display = 'none';
   document.getElementById('appShell').style.display = 'block';
   document.getElementById('userFullName').textContent = SESSION.user.fullName;
+  document.getElementById('userRole').textContent = SESSION.user.role === 'admin' ? 'Administrator' : 'Inventory Manager';
   document.getElementById('userInitial').textContent = SESSION.user.fullName.charAt(0).toUpperCase();
+
+  document.querySelectorAll('[data-role="admin"]').forEach(el => {
+    el.style.display = isAdmin() ? '' : 'none';
+  });
+  document.getElementById('categoriesNote').style.display = isAdmin() ? 'none' : 'block';
+  document.getElementById('suppliersNote').style.display = isAdmin() ? 'none' : 'block';
+
   loadDashboard();
 }
 
@@ -106,15 +165,31 @@ async function doLogout() {
 document.getElementById('logoutBtn').addEventListener('click', doLogout);
 document.getElementById('logoutBtnMobile').addEventListener('click', doLogout);
 
-document.getElementById('changePwBtn').addEventListener('click', () => {
+// ===================== ACCOUNT & SECURITY (password + OTP email) =====================
+document.getElementById('securityBtn').addEventListener('click', () => {
   openModal(`
-    <h3>Change Password</h3>
+    <h3>Account &amp; Security</h3>
     <form id="pwForm">
       <div class="field"><label>Current Password</label><input type="password" id="oldPw" required></div>
-      <div class="field"><label>New Password</label><input type="password" id="newPw" required minlength="6"></div>
+      <div class="field"><label>New Password</label><input type="password" id="newPw" required minlength="10"
+        placeholder="10+ chars, upper/lower/number/symbol"></div>
       <div class="modal-actions">
         <button type="button" class="btn-secondary" onclick="closeModal()">Cancel</button>
-        <button type="submit" class="btn-primary">Update</button>
+        <button type="submit" class="btn-primary">Update Password</button>
+      </div>
+    </form>
+    <hr style="margin:20px 0;border:none;border-top:1px solid var(--border);">
+    <form id="emailForm">
+      <div class="field">
+        <label>Security Email (for login &amp; approval OTP codes)</label>
+        <input type="email" id="secEmail" placeholder="you@example.com">
+      </div>
+      <p style="font-size:12px;color:var(--muted);margin:-8px 0 14px;">
+        Leave blank to disable OTP and log in with just a password. Setting an email here enables 2-factor login.
+      </p>
+      <div class="modal-actions">
+        <button type="button" class="btn-secondary" onclick="closeModal()">Cancel</button>
+        <button type="submit" class="btn-primary">Save Email</button>
       </div>
     </form>`);
   document.getElementById('pwForm').addEventListener('submit', async (e) => {
@@ -124,6 +199,15 @@ document.getElementById('changePwBtn').addEventListener('click', () => {
     try {
       await apiCall('apiChangePassword', [SESSION.token, oldPw, newPw]);
       showToast('Password updated successfully.', 'success');
+      closeModal();
+    } catch (err) { handleError(err); }
+  });
+  document.getElementById('emailForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const email = document.getElementById('secEmail').value.trim();
+    try {
+      await apiCall('apiSetSecurityEmail', [SESSION.token, email]);
+      showToast(email ? 'Security email saved. OTP login is now active.' : 'Security email removed. OTP login disabled.', 'success');
       closeModal();
     } catch (err) { handleError(err); }
   });
@@ -149,6 +233,8 @@ function loadPage(page) {
   else if (page === 'categories') loadCategories();
   else if (page === 'suppliers') loadSuppliers();
   else if (page === 'reports') loadReports();
+  else if (page === 'approvals') loadApprovals();
+  else if (page === 'users') { loadUsers(); loadLogs(); loadAuditLog(); }
 }
 const sidebar = document.getElementById('sidebar');
 const overlay = document.getElementById('sidebarOverlay');
@@ -175,7 +261,7 @@ async function loadDashboard() {
   } catch (err) { handleError(err); }
 }
 
-// ===================== INVENTORY (CRUD) =====================
+// ===================== INVENTORY (CRUD — both roles) =====================
 async function loadInventory() {
   try {
     const items = await apiCall('apiGetInventory', [SESSION.token]);
@@ -190,7 +276,7 @@ async function loadInventory() {
         <td>${fmtDate(i.lastUpdated)}</td>
         <td><button class="btn-sm edit" data-edit="${i.id}">Edit</button><button class="btn-sm danger" data-del="${i.id}">Delete</button></td>
       </tr>`;
-    }).join('') : '<tr><td colspan="10" class="empty-msg">No inventory items yet. Click "+ Add Item" to get started.</td></tr>';
+    }).join('') : '<tr><td colspan="10" class="empty-msg">No inventory items yet.</td></tr>';
 
     tbody.querySelectorAll('[data-edit]').forEach(b => b.addEventListener('click', () => openEditItem(b.dataset.edit)));
     tbody.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', () => deleteItem(b.dataset.del)));
@@ -270,15 +356,15 @@ async function deleteItem(id) {
   } catch (err) { handleError(err); }
 }
 
-// ===================== STOCK MOVEMENTS =====================
+// ===================== STOCK MOVEMENTS (both roles) =====================
 async function loadMovements() {
   try {
     const rows = await apiCall('apiGetStockMovements', [SESSION.token]);
     const tbody = document.querySelector('#movementsTable tbody');
     tbody.innerHTML = rows.length ? rows.map(m => `<tr>
         <td>${m.itemName}</td><td><span class="badge ${m.type === 'IN' ? 'in' : 'out'}">${m.type}</span></td>
-        <td>${m.quantity}</td><td>${m.reason || '-'}</td><td>${fmtDate(m.timestamp)}</td>
-      </tr>`).join('') : '<tr><td colspan="5" class="empty-msg">No stock movements recorded yet.</td></tr>';
+        <td>${m.quantity}</td><td>${m.reason || '-'}</td><td>${m.user}</td><td>${fmtDate(m.timestamp)}</td>
+      </tr>`).join('') : '<tr><td colspan="6" class="empty-msg">No stock movements recorded yet.</td></tr>';
   } catch (err) { handleError(err); }
 }
 
@@ -320,7 +406,7 @@ document.getElementById('addMovementBtn').addEventListener('click', async () => 
   } catch (err) { handleError(err); }
 });
 
-// ===================== CATEGORIES =====================
+// ===================== CATEGORIES (admin: direct — manager: request+OTP) =====================
 async function loadCategories() {
   try {
     const cats = await apiCall('apiGetCategories', [SESSION.token]);
@@ -328,42 +414,55 @@ async function loadCategories() {
     const grid = document.getElementById('categoriesGrid');
     grid.innerHTML = cats.length ? cats.map(c => `
       <div class="cat-card"><h4>${c.name}</h4><p>${c.description || 'No description'}</p>
-      <button class="btn-sm danger" data-del="${c.id}">Delete</button></div>`).join('')
+      <button class="btn-sm danger" data-del="${c.id}">${isAdmin() ? 'Delete' : 'Request Delete'}</button></div>`).join('')
       : '<div class="empty-msg">No categories yet.</div>';
     grid.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', () => deleteCategory(b.dataset.del)));
   } catch (err) { handleError(err); }
 }
 document.getElementById('addCategoryBtn').addEventListener('click', () => {
-  openModal(`<h3>Add Category</h3>
+  openModal(`<h3>${isAdmin() ? 'Add Category' : 'Request: Add Category'}</h3>
     <form id="catForm">
       <div class="field"><label>Name</label><input type="text" id="c_name" required></div>
       <div class="field"><label>Description</label><input type="text" id="c_desc"></div>
+      ${isAdmin() ? '' : '<p style="font-size:12px;color:var(--muted);">This will be sent to an administrator for OTP approval before it takes effect.</p>'}
       <div class="modal-actions">
         <button type="button" class="btn-secondary" onclick="closeModal()">Cancel</button>
-        <button type="submit" class="btn-primary">Save</button>
+        <button type="submit" class="btn-primary">${isAdmin() ? 'Save' : 'Submit Request'}</button>
       </div>
     </form>`);
   document.getElementById('catForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const payload = { name: document.getElementById('c_name').value.trim(), description: document.getElementById('c_desc').value.trim() };
     try {
-      await apiCall('apiAddCategory', [SESSION.token, payload]);
-      showToast('Category added.', 'success');
+      if (isAdmin()) {
+        await apiCall('apiAddCategory', [SESSION.token, payload]);
+        showToast('Category added.', 'success');
+      } else {
+        await apiCall('apiRequestConfigChange', [SESSION.token, 'ADD_CATEGORY', payload]);
+        showToast('Request submitted — sent to an admin for approval.', 'success');
+      }
       closeModal();
       loadCategories();
     } catch (err) { handleError(err); }
   });
 });
 async function deleteCategory(id) {
-  if (!confirm('Delete this category?')) return;
+  const cat = CACHE.categories.find(c => c.id === id);
+  const msg = isAdmin() ? 'Delete this category?' : 'Request deletion of this category? An admin must approve it.';
+  if (!confirm(msg)) return;
   try {
-    await apiCall('apiDeleteCategory', [SESSION.token, id]);
-    showToast('Category deleted.', 'success');
+    if (isAdmin()) {
+      await apiCall('apiDeleteCategory', [SESSION.token, id]);
+      showToast('Category deleted.', 'success');
+    } else {
+      await apiCall('apiRequestConfigChange', [SESSION.token, 'DELETE_CATEGORY', { id: id, name: cat ? cat.name : id }]);
+      showToast('Deletion request submitted for admin approval.', 'success');
+    }
     loadCategories();
   } catch (err) { handleError(err); }
 }
 
-// ===================== SUPPLIERS =====================
+// ===================== SUPPLIERS (admin: direct — manager: request+OTP) =====================
 async function loadSuppliers() {
   try {
     const rows = await apiCall('apiGetSuppliers', [SESSION.token]);
@@ -372,7 +471,8 @@ async function loadSuppliers() {
     tbody.innerHTML = rows.length ? rows.map(s => `<tr>
         <td>${s.name}</td><td>${s.contactPerson || '-'}</td><td>${s.phone || '-'}</td>
         <td>${s.email || '-'}</td><td>${s.address || '-'}</td>
-        <td><button class="btn-sm edit" data-edit="${s.id}">Edit</button><button class="btn-sm danger" data-del="${s.id}">Delete</button></td>
+        <td><button class="btn-sm edit" data-edit="${s.id}">${isAdmin() ? 'Edit' : 'Request Edit'}</button>
+        <button class="btn-sm danger" data-del="${s.id}">${isAdmin() ? 'Delete' : 'Request Delete'}</button></td>
       </tr>`).join('') : '<tr><td colspan="6" class="empty-msg">No suppliers yet.</td></tr>';
     tbody.querySelectorAll('[data-edit]').forEach(b => b.addEventListener('click', () => openEditSupplier(b.dataset.edit)));
     tbody.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', () => deleteSupplier(b.dataset.del)));
@@ -380,16 +480,17 @@ async function loadSuppliers() {
 }
 function supplierFormHtml(s) {
   s = s || {};
-  return `<h3>${s.id ? 'Edit Supplier' : 'Add Supplier'}</h3>
+  return `<h3>${s.id ? (isAdmin() ? 'Edit Supplier' : 'Request: Edit Supplier') : (isAdmin() ? 'Add Supplier' : 'Request: Add Supplier')}</h3>
     <form id="supForm">
       <div class="field"><label>Name</label><input type="text" id="s_name" value="${s.name || ''}" required></div>
       <div class="field"><label>Contact Person</label><input type="text" id="s_contact" value="${s.contactPerson || ''}"></div>
       <div class="field"><label>Phone</label><input type="text" id="s_phone" value="${s.phone || ''}"></div>
       <div class="field"><label>Email</label><input type="email" id="s_email" value="${s.email || ''}"></div>
       <div class="field"><label>Address</label><input type="text" id="s_address" value="${s.address || ''}"></div>
+      ${isAdmin() ? '' : '<p style="font-size:12px;color:var(--muted);">This will be sent to an administrator for OTP approval before it takes effect.</p>'}
       <div class="modal-actions">
         <button type="button" class="btn-secondary" onclick="closeModal()">Cancel</button>
-        <button type="submit" class="btn-primary">Save</button>
+        <button type="submit" class="btn-primary">${isAdmin() ? 'Save' : 'Submit Request'}</button>
       </div>
     </form>`;
 }
@@ -410,25 +511,36 @@ function bindSupplierForm(existing) {
       email: document.getElementById('s_email').value.trim(),
       address: document.getElementById('s_address').value.trim()
     };
-    const action = existing ? 'apiUpdateSupplier' : 'apiAddSupplier';
     try {
-      await apiCall(action, [SESSION.token, payload]);
-      showToast('Supplier saved.', 'success');
+      if (isAdmin()) {
+        await apiCall(existing ? 'apiUpdateSupplier' : 'apiAddSupplier', [SESSION.token, payload]);
+        showToast('Supplier saved.', 'success');
+      } else {
+        await apiCall('apiRequestConfigChange', [SESSION.token, existing ? 'UPDATE_SUPPLIER' : 'ADD_SUPPLIER', payload]);
+        showToast('Request submitted — sent to an admin for approval.', 'success');
+      }
       closeModal();
       loadSuppliers();
     } catch (err) { handleError(err); }
   });
 }
 async function deleteSupplier(id) {
-  if (!confirm('Delete this supplier?')) return;
+  const sup = CACHE.suppliers.find(s => s.id === id);
+  const msg = isAdmin() ? 'Delete this supplier?' : 'Request deletion of this supplier? An admin must approve it.';
+  if (!confirm(msg)) return;
   try {
-    await apiCall('apiDeleteSupplier', [SESSION.token, id]);
-    showToast('Supplier deleted.', 'success');
+    if (isAdmin()) {
+      await apiCall('apiDeleteSupplier', [SESSION.token, id]);
+      showToast('Supplier deleted.', 'success');
+    } else {
+      await apiCall('apiRequestConfigChange', [SESSION.token, 'DELETE_SUPPLIER', { id: id, name: sup ? sup.name : id }]);
+      showToast('Deletion request submitted for admin approval.', 'success');
+    }
     loadSuppliers();
   } catch (err) { handleError(err); }
 }
 
-// ===================== REPORTS =====================
+// ===================== REPORTS (both roles) =====================
 async function loadReports() {
   try {
     const r = await apiCall('apiGetReports', [SESSION.token]);
@@ -444,6 +556,149 @@ async function loadReports() {
     document.getElementById('reportStockIn').textContent = r.stockIn30d;
     document.getElementById('reportStockOut').textContent = r.stockOut30d;
     document.getElementById('reportTotalValue').textContent = fmtMoney(r.totalInventoryValue);
+  } catch (err) { handleError(err); }
+}
+
+// ===================== PENDING APPROVALS (admin only) =====================
+async function loadApprovals() {
+  if (!isAdmin()) return;
+  try {
+    const rows = await apiCall('apiGetPendingConfigChanges', [SESSION.token]);
+    const list = document.getElementById('approvalsList');
+    list.innerHTML = rows.length ? rows.map(r => `
+      <div class="cat-card approval-card">
+        <div class="approval-type">${r.type.replace(/_/g, ' ')}</div>
+        <div class="approval-meta">Requested by ${r.requestedBy} · ${fmtDate(r.requestedAt)}</div>
+        <div class="approval-payload">${escapeHtml(JSON.stringify(r.payload, null, 2))}</div>
+        <div class="approval-actions">
+          <button class="btn-primary" data-approve="${r.id}">Approve</button>
+          <button class="btn-secondary" data-reject="${r.id}">Reject</button>
+        </div>
+      </div>`).join('') : '<div class="empty-msg">No pending requests.</div>';
+
+    list.querySelectorAll('[data-approve]').forEach(b => b.addEventListener('click', () => openApproveModal(b.dataset.approve)));
+    list.querySelectorAll('[data-reject]').forEach(b => b.addEventListener('click', () => rejectRequest(b.dataset.reject)));
+  } catch (err) { handleError(err); }
+}
+function escapeHtml(str) {
+  return str.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+function openApproveModal(requestId) {
+  openModal(`<h3>Approve Change</h3>
+    <p style="font-size:13px;color:var(--muted);">Enter the OTP code that was emailed to your security address to confirm this change.</p>
+    <form id="approveForm">
+      <div class="field"><label>Approval Code</label><input type="text" id="approveOtp" inputmode="numeric" maxlength="6" class="otp-input" required></div>
+      <div class="modal-actions">
+        <button type="button" class="btn-secondary" onclick="closeModal()">Cancel</button>
+        <button type="submit" class="btn-primary">Approve</button>
+      </div>
+    </form>`);
+  document.getElementById('approveForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const code = document.getElementById('approveOtp').value.trim();
+    try {
+      await apiCall('apiApproveConfigChange', [SESSION.token, requestId, code]);
+      showToast('Change approved and applied.', 'success');
+      closeModal();
+      loadApprovals();
+    } catch (err) { handleError(err); }
+  });
+}
+async function rejectRequest(requestId) {
+  const reason = prompt('Optional: reason for rejecting this request') || '';
+  try {
+    await apiCall('apiRejectConfigChange', [SESSION.token, requestId, reason]);
+    showToast('Request rejected.', 'success');
+    loadApprovals();
+  } catch (err) { handleError(err); }
+}
+
+// ===================== USERS, LOGS & AUDIT (admin only) =====================
+async function loadUsers() {
+  if (!isAdmin()) return;
+  try {
+    const rows = await apiCall('apiGetUsers', [SESSION.token]);
+    const tbody = document.querySelector('#usersTable tbody');
+    tbody.innerHTML = rows.length ? rows.map(u => `<tr>
+        <td>${u.username}</td><td>${u.fullName}</td><td>${u.role === 'admin' ? 'Admin' : 'Inventory Manager'}</td>
+        <td>${u.status}</td><td>${fmtDate(u.lastLogin)}</td>
+        <td><button class="btn-sm toggle" data-toggle="${u.id}">${u.status === 'active' ? 'Disable' : 'Enable'}</button>
+        <button class="btn-sm edit" data-resetpw="${u.id}">Reset Pw</button></td>
+      </tr>`).join('') : '<tr><td colspan="6" class="empty-msg">No users found.</td></tr>';
+    tbody.querySelectorAll('[data-toggle]').forEach(b => b.addEventListener('click', () => toggleUser(b.dataset.toggle)));
+    tbody.querySelectorAll('[data-resetpw]').forEach(b => b.addEventListener('click', () => resetUserPw(b.dataset.resetpw)));
+  } catch (err) { handleError(err); }
+}
+async function loadLogs() {
+  if (!isAdmin()) return;
+  try {
+    const rows = await apiCall('apiGetActivityLogs', [SESSION.token]);
+    const tbody = document.querySelector('#logsTable tbody');
+    tbody.innerHTML = rows.length ? rows.map(l => `<tr>
+        <td>${l.user}</td><td>${l.action}</td><td>${l.details || '-'}</td><td>${fmtDate(l.timestamp)}</td>
+      </tr>`).join('') : '<tr><td colspan="4" class="empty-msg">No activity logs yet.</td></tr>';
+  } catch (err) { handleError(err); }
+}
+async function loadAuditLog() {
+  if (!isAdmin()) return;
+  try {
+    const rows = await apiCall('apiGetConfigAuditLog', [SESSION.token]);
+    const tbody = document.querySelector('#auditTable tbody');
+    tbody.innerHTML = rows.length ? rows.map(a => `<tr>
+        <td>${a.action}</td><td>${a.entity}</td>
+        <td style="max-width:180px;white-space:normal;">${a.oldValue || '-'}</td>
+        <td style="max-width:180px;white-space:normal;">${a.newValue || '-'}</td>
+        <td>${a.requestedBy}</td><td>${a.approvedBy}</td><td>${fmtDate(a.timestamp)}</td>
+      </tr>`).join('') : '<tr><td colspan="7" class="empty-msg">No configuration changes yet.</td></tr>';
+  } catch (err) { handleError(err); }
+}
+
+document.getElementById('addUserBtn').addEventListener('click', () => {
+  openModal(`<h3>Add User</h3>
+    <form id="userForm">
+      <div class="field"><label>Username</label><input type="text" id="u_username" required></div>
+      <div class="field"><label>Full Name</label><input type="text" id="u_fullname" required></div>
+      <div class="field"><label>Role</label>
+        <select id="u_role"><option value="inventory_manager">Inventory Manager</option><option value="admin">Admin</option></select></div>
+      <div class="field"><label>Temporary Password</label>
+        <input type="password" id="u_password" required minlength="10" placeholder="10+ chars, upper/lower/number/symbol"></div>
+      <div class="modal-actions">
+        <button type="button" class="btn-secondary" onclick="closeModal()">Cancel</button>
+        <button type="submit" class="btn-primary">Create</button>
+      </div>
+    </form>`);
+  document.getElementById('userForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const payload = {
+      username: document.getElementById('u_username').value.trim(),
+      fullName: document.getElementById('u_fullname').value.trim(),
+      role: document.getElementById('u_role').value,
+      password: document.getElementById('u_password').value
+    };
+    try {
+      await apiCall('apiAddUser', [SESSION.token, payload]);
+      showToast('User created.', 'success');
+      closeModal();
+      loadUsers();
+    } catch (err) { handleError(err); }
+  });
+});
+
+async function toggleUser(id) {
+  if (!confirm("Change this user's active status?")) return;
+  try {
+    await apiCall('apiToggleUserStatus', [SESSION.token, id]);
+    showToast('User status updated.', 'success');
+    loadUsers();
+  } catch (err) { handleError(err); }
+}
+
+async function resetUserPw(id) {
+  const newPw = prompt('Enter a new temporary password (10+ chars, upper/lower/number/symbol):');
+  if (!newPw) return;
+  try {
+    await apiCall('apiResetUserPassword', [SESSION.token, id, newPw]);
+    showToast('Password reset.', 'success');
   } catch (err) { handleError(err); }
 }
 
