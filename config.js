@@ -6,4 +6,4 @@
 // Get this URL from: Apps Script project → Deploy → Manage deployments
 // → copy the "Web app" URL (it ends in /exec).
 // ============================================================
-const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbz4vz4AYNNAPlTMTq3AZ-VUZoWEhFheYWyooZN8mhReinVLdaodf92Hc6dPW8-Y_mAO/exec";
+const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxFZTtyFW5XeEfPfh2S7SfM6VjoTNqtpGXcjU_srEzkAsbGxrW9T96mt6oOdDPlx2jQ/exec";
